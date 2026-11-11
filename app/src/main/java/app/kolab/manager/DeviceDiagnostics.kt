@@ -44,6 +44,9 @@ object DeviceDiagnostics {
         val present=readNode("/proc/modules")
         return JSONObject().apply{
             put("schema","kolab-device-diagnostics-v1")
+            put("capturedAtEpochMs",System.currentTimeMillis())
+            put("elapsedRealtimeMs",android.os.SystemClock.elapsedRealtime())
+            put("bootId",readNode("/proc/sys/kernel/random/boot_id"))
             put("device",Build.MANUFACTURER+" "+Build.MODEL)
             put("android",Build.VERSION.RELEASE)
             put("sdk",Build.VERSION.SDK_INT)

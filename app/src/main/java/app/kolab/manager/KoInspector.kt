@@ -60,17 +60,17 @@ object KoInspector {
                 }
                 val vermagic=data["vermagic"]
                 val mismatch=vermagic?.substringBefore(" ")?.let{it!=release} ?: false
-                val blocked=kind!=1 || arch!=183 || mismatch
+                val blocked=kind!=1 || arch!=183
                 val notes=buildList {
                     if(kind!=1) add("ELF 不是 ET_REL")
                     if(arch!=183) add("不是 AArch64")
-                    if(mismatch) add("vermagic 与内核 release 不匹配")
+                    if(mismatch) add("vermagic 与当前内核 release 不匹配；可能被内核拒绝，需要合法兼容性验证")
                     if(vermagic==null) add("缺失 vermagic")
                     add("未验证签名、符号 CRC、KMI、页面大小、依赖与初始化安全性")
                 }.joinToString("；")
                 KoInfo(if(arch==183)"AArch64" else "e_machine=$arch",
                     if(kind==1)"ET_REL" else "e_type=$kind",vermagic,data["license"],data["depends"],
-                    if(blocked)"拒绝" else "需人工复核",notes)
+                    if(blocked)"拒绝" else if(mismatch)"版本不匹配·仅供分析" else "需人工复核",notes)
             }
         } catch(e:Exception) { reject("解析异常：${e.javaClass.simpleName}") }
     }

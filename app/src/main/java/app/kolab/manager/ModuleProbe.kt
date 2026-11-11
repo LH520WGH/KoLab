@@ -58,6 +58,8 @@ object ModuleProbe {
                 put("name", name.take(180))
                 put("size", count)
                 put("sha256", sha)
+                put("sha256Prefix8BytesHex",sha.take(16))
+                put("sha256PrefixNote","本项仅用于与 Gloomy 逆向资料中的摘要格式核对；不执行厂商节点写入")
                 put("kind", kind)
                 put("verdict", state)
                 put("notes", detail)
