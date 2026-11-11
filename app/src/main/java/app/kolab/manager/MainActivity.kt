@@ -4,140 +4,164 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
-import android.os.Build
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.system.Os
+import android.provider.OpenableColumns
 import android.view.Gravity
 import android.widget.*
 import java.util.concurrent.Executors
 
-/** Offline only: no shell, Root, native executable or network. */
-class MainActivity:Activity() {
-    private val executor=Executors.newSingleThreadExecutor()
-    private lateinit var store:ModuleStore
-    private lateinit var root:LinearLayout
-    private var tab=0
-    private var selected:String?=null
-    private var items=listOf<SavedModule>()
-    private val bg=Color.rgb(16,24,35)
-    private val fg=Color.rgb(235,242,250)
-    private val pale=Color.rgb(162,190,216)
-    private val blue=Color.rgb(106,190,250)
-    private fun text(value:String,sp:Float=15f,color:Int=fg)=TextView(this).apply{
-        text=value;textSize=sp;setTextColor(color);setPadding(8,12,8,12)
+/** KoLab Bridge 0.2: a real, signed-client IPC prototype, not a working loader. */
+class MainActivity : Activity() {
+    private val pool = Executors.newSingleThreadExecutor()
+    private val bg = Color.rgb(13,20,31)
+    private val fg = Color.rgb(239,244,251)
+    private val sub = Color.rgb(160,180,201)
+    private val accent = Color.rgb(113,186,248)
+    private lateinit var root: LinearLayout
+    private var tab = 0
+    private val density get() = resources.displayMetrics.density
+    private fun dp(n:Int)=(n*density).toInt()
+    private fun txt(s:String,size:Float=15f, color:Int=fg) = TextView(this).apply {
+        text=s;textSize=size;setTextColor(color);setPadding(dp(4),dp(9),dp(4),dp(9))
     }
-    private fun btn(value:String,action:()->Unit)=Button(this).apply{
-        text=value;setOnClickListener{action()}
+    private fun button(s:String,action:()->Unit)=Button(this).apply{
+        text=s;textSize=14f;isAllCaps=false;setTextColor(fg)
+        background=GradientDrawable().apply{
+            setColor(Color.rgb(29,42,59));cornerRadius=dp(10).toFloat()
+        }
+        setPadding(dp(12),dp(12),dp(12),dp(12))
+        setOnClickListener{action()}
     }
-    override fun onCreate(savedInstanceState:Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.statusBarColor=bg;window.navigationBarColor=bg
-        store=ModuleStore(this)
-        root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg);setPadding(16,16,16,16)}
-        setContentView(root);refresh()
+    private fun add(body:LinearLayout, child:android.view.View) {
+        body.addView(child,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(10)})
     }
-    private fun refresh()=executor.execute{
-        val data=runCatching{store.list()}.getOrDefault(emptyList())
-        runOnUiThread{items=data;render()}
+    override fun onCreate(state:Bundle?) {
+        super.onCreate(state)
+        window.statusBarColor=bg
+        window.navigationBarColor=bg
+        root=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)
+            setPadding(dp(14),dp(14),dp(14),dp(14))
+        }
+        setContentView(root);render()
     }
     private fun render(){
         root.removeAllViews()
-        root.addView(text("KoLab  ·  LOCAL",25f,blue))
-        root.addView(text("KERNEL MODULE LABORATORY",11f,pale))
+        root.addView(txt("KoLab  /  BRIDGE",24f,accent))
+        root.addView(txt("SERVICE PROTOTYPE · 0.2.0",11f,sub))
         val scroll=ScrollView(this)
         val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
-        scroll.addView(body);root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        scroll.addView(body)
+        root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         when(tab){
             0 -> {
-                body.addView(text("本地模块仓库：${items.size} 个",20f))
-                body.addView(btn("＋ 导入 .ko 文件"){importFiles()})
-                if(items.isEmpty())body.addView(text("还没有模块。导入不会执行或加载文件。",14f,pale))
-                items.forEach{item->
-                    body.addView(btn("${item.name}\n${item.category} · ${item.arch} · ${item.verdict}"){
-                        selected=item.id;tab=1;render()
-                    })
-                }
+                add(body,txt("服务状态",21f))
+                add(body,txt("跨应用 Binder 服务：已安装\n协议：IKoLabBridge v1\n模块只读预检：可用\nGloomy 加载机制：尚未移植\n真实驱动加载：不可用",15f))
+                add(body,txt("此版本是可调用的 IPC 原型，不是能刷入驱动的版本。不会访问 Root、修改 /data/adb 或加载未知 .ko。",13f,sub))
+                add(body,button("选择文件进行临时静态检查"){pickFile()})
+                add(body,button("检查服务接口"){localStatus()})
+                add(body,txt("阶段目标：验证已授权 App → KoLab IPC → 文件预检 → 结果反馈的完整链路。",13f,sub))
             }
             1 -> {
-                body.addView(text("静态兼容性分析",20f))
-                val item=items.find{it.id==selected} ?: items.firstOrNull()
-                if(item==null) body.addView(text("请先导入模块。"))
-                else {
-                    body.addView(text("文件：${item.name}\nSHA256：${item.sha}\n大小：${item.size} 字节\n架构：${item.arch}\nvermagic：${item.vermagic ?: "未知"}\n预检：${item.verdict}\n说明：${item.notes}",14f))
-                    body.addView(btn("更改分类"){
-                        val opts=arrayOf("未分类","触摸","传感器","网络","实验","其他")
-                        AlertDialog.Builder(this).setItems(opts){_,i->
-                            executor.execute{store.category(item.id,opts[i]);refresh()}
-                        }.show()
-                    })
-                    body.addView(btn("删除仓库副本"){
-                        AlertDialog.Builder(this).setTitle("删除模块副本？")
-                            .setMessage("仅删除 KoLab 的副本，不会删除原文件或卸载内核模块。")
-                            .setPositiveButton("删除"){_,_->
-                                executor.execute{runCatching{store.delete(item)};refresh()}
+                add(body,txt("受信任应用",21f))
+                add(body,txt("授权在本机保存且绑定 APK 签名。第三方必须主动适配 KoLab 的 Binder 协议。此版本仅开放查询和静态检查。",13f,sub))
+                add(body,button("＋ 选择要授权的应用"){chooseClient()})
+                val granted=BridgeSecurity.granted(this).sorted()
+                if(granted.isEmpty()) add(body,txt("当前没有外部应用获授权",15f,sub))
+                granted.forEach { entry ->
+                    add(body,button(entry.substringBefore(":")+"\n签名 SHA256："+entry.substringAfter(":").take(18)+"…\n点击撤销") {
+                        AlertDialog.Builder(this).setTitle("撤销授权？")
+                            .setMessage(entry.substringBefore(":"))
+                            .setPositiveButton("撤销"){_,_->
+                                BridgeSecurity.revoke(this,entry);render()
                             }.setNegativeButton("取消",null).show()
                     })
                 }
             }
             2 -> {
-                body.addView(text("设备信息",20f))
-                body.addView(text("型号：${Build.MODEL}\nAndroid：${Build.VERSION.RELEASE}\n内核：${Os.uname().release}\n架构：${Build.SUPPORTED_ABIS.joinToString()}",14f))
-                body.addView(text("普通权限读取，不访问 KernelSU 或系统受限节点。",13f,pale))
-            }
-            else -> {
-                body.addView(text("KoLab V1 · 离线模式",20f))
-                body.addView(text("独立包名 app.kolab.manager\n无 INTERNET 权限\n不请求 Root、不执行 .ko\n文件副本保存于应用私有空间\n卸载 KoLab 会清除私有仓库，请保留原始 .ko。",14f))
-                body.addView(btn("导出 JSON 清单"){exportJson()})
+                add(body,txt("设备与验证边界",21f))
+                add(body,txt("设备："+Build.MANUFACTURER+" "+Build.MODEL+
+                    "\nAndroid："+Build.VERSION.RELEASE+
+                    "\n内核："+Os.uname().release+
+                    "\nCPU ABI："+Build.SUPPORTED_ABIS.joinToString(),14f))
+                add(body,txt("Root 状态：未请求\n模块签名：未测试\nVivo 设备专用加载条件：未归因",14f,sub))
+                add(body,txt("下一阶段：分析 Gloomy 实际调用链，再开发设备兼容适配器。",14f,sub))
             }
         }
         val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER}
-        listOf("仓库","分析","设备","设置").forEachIndexed{i,name->
-            nav.addView(btn(name){tab=i;render()},LinearLayout.LayoutParams(0,-2,1f))
+        listOf("服务","授权","设备").forEachIndexed{idx,title->
+            nav.addView(button(title){tab=idx;render()},LinearLayout.LayoutParams(0,dp(48),1f).apply {
+                marginEnd=dp(4)
+            })
         }
         root.addView(nav)
     }
-    private fun importFiles(){
-        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{
-            addCategory(Intent.CATEGORY_OPENABLE);type="*/*";putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true)
-        },31)
+    private fun localStatus(){
+        val status="协议 v1 就绪\n已授权客户端数："+BridgeSecurity.granted(this).size+
+            "\n加载后端：NOT_VERIFIED（尚不可加载 .ko）"
+        AlertDialog.Builder(this).setTitle("Bridge 状态").setMessage(status)
+            .setPositiveButton("确定",null).show()
     }
-    private fun exportJson(){
-        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{
-            addCategory(Intent.CATEGORY_OPENABLE);type="application/json"
-            putExtra(Intent.EXTRA_TITLE,"kolab-manifest.json")
-        },32)
+    private fun chooseClient(){
+        @Suppress("DEPRECATION")
+        val apps=packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).apply{
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        },0).map{it.activityInfo.packageName to it.loadLabel(packageManager).toString()}
+            .distinctBy{it.first}.filter{it.first!=packageName}.sortedBy{it.second}
+        if(apps.isEmpty()){
+            AlertDialog.Builder(this).setMessage("系统没有返回可选择的应用。")
+                .setPositiveButton("确定",null).show();return
+        }
+        val labels=apps.map{it.second+"\n"+it.first}.toTypedArray()
+        AlertDialog.Builder(this).setTitle("选择可信客户端")
+            .setItems(labels){_,index->
+                val pkg=apps[index].first
+                val fingerprint=BridgeSecurity.fingerprint(this,pkg)
+                if(fingerprint==null){
+                    AlertDialog.Builder(this).setMessage("此应用的签名无法单独验证，不能授权。")
+                        .setPositiveButton("确定",null).show()
+                }else {
+                    AlertDialog.Builder(this).setTitle("确认授权？")
+                        .setMessage("应用："+pkg+"\n签名 SHA-256："+fingerprint+
+                            "\n\n仅允许查询 Bridge 状态和提交文件静态检查；无加载权限。")
+                        .setPositiveButton("授权"){_,_->
+                            runCatching{BridgeSecurity.grant(this,pkg)}
+                                .onFailure{Toast.makeText(this,it.message,Toast.LENGTH_LONG).show()}
+                            render()
+                        }.setNegativeButton("取消",null).show()
+                }
+            }.setNegativeButton("取消",null).show()
     }
-    @Deprecated("Framework compatibility")
+    private fun pickFile(){
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE);type="*/*"
+        },51)
+    }
+    @Deprecated("Android activity result bridge")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
         super.onActivityResult(requestCode,resultCode,data)
-        if(resultCode!=RESULT_OK || data==null)return
-        if(requestCode==31){
-            val uris=linkedSetOf<Uri>()
-            data.data?.let{uris.add(it)}
-            data.clipData?.let{c->for(i in 0 until c.itemCount)uris.add(c.getItemAt(i).uri)}
-            executor.execute{
-                val messages=uris.take(50).map{runCatching{store.add(it)}.getOrElse{e->"失败：${e.message}"}}
-                runOnUiThread{
-                    AlertDialog.Builder(this).setTitle("导入结果").setMessage(messages.joinToString("\n"))
-                        .setPositiveButton("确定",null).show()
+        if(requestCode!=51 || resultCode!=RESULT_OK)return
+        val uri=data?.data?:return
+        pool.execute {
+            val result=runCatching {
+                var name="selected-file"
+                contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use{c->
+                    if(c.moveToFirst())name=c.getString(0)?:name
                 }
-                refresh()
-            }
-        } else if(requestCode==32){
-            val uri=data.data ?:return
-            executor.execute{
-                runCatching{
-                    val arr=org.json.JSONArray()
-                    store.list().forEach{m->arr.put(org.json.JSONObject().apply{
-                        put("name",m.name);put("sha256",m.sha);put("size",m.size)
-                        put("category",m.category);put("vermagic",m.vermagic);put("verdict",m.verdict)
-                    })}
-                    val content=org.json.JSONObject().put("format","kolab-v1").put("modules",arr).toString(2)
-                    contentResolver.openOutputStream(uri)?.bufferedWriter()?.use{it.write(content)}
-                }.onFailure{e->runOnUiThread{Toast.makeText(this,"导出失败：${e.message}",Toast.LENGTH_LONG).show()}}
+                val fd=contentResolver.openFileDescriptor(uri,"r")?:error("无法打开文件")
+                ModuleProbe.inspect(this,fd,name)
+            }.getOrElse { "检查失败："+it.message }
+            runOnUiThread{
+                if(!isFinishing)AlertDialog.Builder(this)
+                    .setTitle("静态检查（不加载）").setMessage(result)
+                    .setPositiveButton("关闭",null).show()
             }
         }
     }
-    override fun onDestroy(){executor.shutdown();super.onDestroy()}
+    override fun onDestroy(){pool.shutdown();super.onDestroy()}
 }
