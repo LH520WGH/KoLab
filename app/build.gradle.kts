@@ -9,8 +9,8 @@ android {
         applicationId = "app.kolab.manager"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0-diagnostics-alpha"
+        versionCode = 4
+        versionName = "0.4.0-root-test"
     }
     buildFeatures { aidl = true }
     compileOptions {
