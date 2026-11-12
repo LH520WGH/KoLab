@@ -1,0 +1,8 @@
+KoLab 0.4: signed Binder read-only; manual Root insmod from main UI only.
+- User selects trusted .ko via Android picker.
+- App checks ELF ET_REL AArch64 and exact vermagic, records SHA256, and shows confirmation.
+- One standard su -c /system/bin/insmod attempt only. No retry, no unload, no own127, no BSP/SELinux modifications.
+- Records process exit and before/after /proc/modules, exports JSON.
+- KernelSU app authorization required. The kernel may reject modules with EPERM or an incompatible ABI; this is expected.
+- Cross-app load API remains intentionally disabled. Companion app queries/inspects only.
+- Debug APK signatures may differ per workflow. If update install fails, remove old debug copy first.

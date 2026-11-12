@@ -15,7 +15,7 @@ import android.widget.*
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
-/** Offline diagnostic tool + signed Binder service: no Root or kernel writes. */
+/** Main UI: user-confirmed standard Root module loading; external Binder stays read-only. */
 class MainActivity:Activity(){
     private val pool=Executors.newSingleThreadExecutor()
     private val bg=Color.rgb(13,20,31)
@@ -25,6 +25,7 @@ class MainActivity:Activity(){
     private lateinit var root:LinearLayout
     private var tab=0
     private var lastReport=""
+    private var lastLoadReport=""
     private val density get()=resources.displayMetrics.density
     private fun dp(n:Int)=(n*density).toInt()
     private fun text(s:String,size:Float=15f,color:Int=fg)=TextView(this).apply{
@@ -54,12 +55,14 @@ class MainActivity:Activity(){
                 insets
             }
         }
-        setContentView(root);root.requestApplyInsets();render()
+        setContentView(root);root.requestApplyInsets()
+        ManualKoLoader.cleanStale(this)
+        render()
     }
     private fun render(){
         root.removeAllViews()
         root.addView(text("KoLab  /  BRIDGE",23f,accent))
-        root.addView(text("0.3.0  ·  DEVICE DIAGNOSTICS",11f,sub))
+        root.addView(text("0.4.0  ·  STANDARD ROOT TEST",11f,sub))
         val scroll=ScrollView(this)
         val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
         scroll.addView(body)
@@ -67,9 +70,15 @@ class MainActivity:Activity(){
         when(tab){
             0->{
                 add(body,text("连接状态",21f))
-                add(body,text("Binder 跨应用接口：就绪（协议 1）\n外部 App：按签名授权\n设备检查：只读\nGloomy 设备加载后端：未验证\n第三方 .ko 加载：不可用",15f))
-                add(body,text("本版本没有自动执行 own127、写入 Vivo BSP 节点、调用 Root Shell 或加载 .ko。设备状态仅用于诊断。",13f,sub))
-                add(body,button("选择文件：静态 ELF / modinfo 检查"){pickFile()})
+                add(body,text("Binder 跨应用接口：就绪（只读）\n本机 Root 加载：可手动测试标准 insmod\nVivo 安全绕过：未集成\nGloomy 设备专用加载：仍未验证",15f))
+                add(body,text("只有你在主程序中二次确认后才会尝试一次标准 insmod。不会运行 own127、修改 BSP/SELinux 或把 Root 操作开放给其他 App。",13f,sub))
+                add(body,button("检查 KernelSU Root 是否可用"){checkRootAccess()})
+                add(body,button("选择 .ko → 校验 → 手动尝试标准加载"){pickKoForLoad()})
+                add(body,button("选择文件：只读 ELF / modinfo 分析"){pickFile()})
+                if(lastLoadReport.isNotBlank()){
+                    add(body,button("导出上次加载结果 JSON"){exportLoadResult()})
+                    add(body,text("上次加载测试：\n"+lastLoadReport,12f))
+                }
                 add(body,button("查看 Binder 能力信息"){showCapabilities()})
                 add(body,button("查看设备只读诊断"){tab=1;render();captureDiagnostic()})
             }
@@ -119,6 +128,7 @@ class MainActivity:Activity(){
                 put("kernel",android.system.Os.uname().release)
                 put("inspectSupported",true)
                 put("loadModuleSupported",false)
+                put("localManualStandardRootTestSupported",true)
                 put("state",LoaderBackend.status().state.name)
                 put("notes",LoaderBackend.status().reason)
             }.toString(2)
@@ -143,6 +153,80 @@ class MainActivity:Activity(){
             type="application/json"
             putExtra(Intent.EXTRA_TITLE,"kolab-device-diagnostics.json")
         },52)
+    }
+    private fun checkRootAccess(){
+        pool.execute{
+            val result=RootModuleExec.root()
+            val message="退出码："+result.code+"\n输出："+result.output+
+                "\n\n仅查询 Root 身份，本操作不会加载模块。"
+            runOnUiThread{if(!isFinishing)AlertDialog.Builder(this)
+                .setTitle("KernelSU Root 检查").setMessage(message)
+                .setPositiveButton("确定",null).show()}
+        }
+    }
+    private fun pickKoForLoad(){
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{
+            addCategory(Intent.CATEGORY_OPENABLE);type="*/*"
+        },53)
+    }
+    private fun exportLoadResult(){
+        if(lastLoadReport.isBlank())return
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{
+            addCategory(Intent.CATEGORY_OPENABLE);type="application/json"
+            putExtra(Intent.EXTRA_TITLE,"kolab-load-result.json")
+        },54)
+    }
+    private fun handleLoadSelection(uri:android.net.Uri){
+        pool.execute {
+            val result=runCatching {
+                var filename="selected.ko"
+                contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use{c->
+                    if(c.moveToFirst())filename=c.getString(0)?:filename
+                }
+                ManualKoLoader.prepare(this,uri,filename)
+            }
+            runOnUiThread{
+                if(isFinishing){
+                    result.getOrNull()?.file?.delete();return@runOnUiThread
+                }
+                result.onFailure{e->
+                    AlertDialog.Builder(this).setTitle("无法准备加载测试")
+                        .setMessage(e.message?:"未知文件错误")
+                        .setPositiveButton("确定",null).show()
+                }
+                result.onSuccess{candidate->
+                    val rejected=ManualKoLoader.compatibilityError(candidate)
+                    val details="文件："+candidate.name+
+                        "\nSHA-256："+candidate.sha+
+                        "\n文件大小："+candidate.bytes+
+                        "\nELF："+candidate.facts.kind+" / "+candidate.facts.architecture+
+                        "\nvermagic："+(candidate.facts.vermagic?:"缺失")+
+                        "\n当前内核："+candidate.kernel+
+                        "\n\n"+(rejected?:"测试仅调用标准 insmod 一次；加载内核模块可能导致崩溃或重启，请确认已经有数据备份。")
+                    val dialog=AlertDialog.Builder(this).setTitle(
+                        if(rejected!=null)"未通过兼容性校验" else "确认标准 Root 加载测试？")
+                        .setMessage(details)
+                        .setNegativeButton("取消"){_,_->candidate.file.delete()}
+                        .setOnCancelListener{candidate.file.delete()}
+                    if(rejected==null){
+                        dialog.setPositiveButton("我确认，仅加载一次"){_,_->
+                            pool.execute {
+                                val summary=ManualKoLoader.load(candidate).toString(2)
+                                runOnUiThread{if(!isFinishing){
+                                    lastLoadReport=summary
+                                    tab=0;render()
+                                    AlertDialog.Builder(this).setTitle("真实加载尝试结果")
+                                        .setMessage(summary).setPositiveButton("确定",null).show()
+                                }}
+                            }
+                        }
+                    }else dialog.setPositiveButton("知道了"){_,_->candidate.file.delete()}
+                    dialog.show()
+                }
+            }
+        }
     }
     private fun chooseClient(){
         @Suppress("DEPRECATION")
@@ -199,10 +283,12 @@ class MainActivity:Activity(){
                     .setTitle("文件检查结果（不加载）")
                     .setMessage(report).setPositiveButton("关闭",null).show()}
             }
-            52->pool.execute{
+            53->handleLoadSelection(uri)
+            52,54->pool.execute{
                 val failure=runCatching{
                     val out=contentResolver.openOutputStream(uri)?:error("无法创建文件")
-                    out.bufferedWriter().use{it.write(lastReport)}
+                    val dataToSave=if(requestCode==52)lastReport else lastLoadReport
+                    out.bufferedWriter().use{it.write(dataToSave)}
                 }.exceptionOrNull()
                 runOnUiThread{
                     Toast.makeText(this,if(failure==null)"诊断报告已保存" else
